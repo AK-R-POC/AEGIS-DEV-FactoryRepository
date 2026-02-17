@@ -36,7 +36,7 @@ on:
       study_no:
         description: "StudyNo（Sタイプ必須、Mタイプ不要）"
         required: false
-        default: "STD0001"
+        default: "STD2002"
       reporting_event:
         description: "自由に設定可能、フォルダ名に対応必要"
         required: true
@@ -53,15 +53,15 @@ on:
       codeowner:
         description: "Code Owner（UserIDまたはTeamSlug、カンマ区切りで複数指定可）"
         required: true
-        default: "jiangtestgm"
+        default: "atsurinange"
       team_slug:
         description: "Team Slug（Team名ではありません）、カンマ区切りで複数指定可"
         required: true
-        default: "test001"
+        default: "aegis-admins-dev"
       team_mode:
         description: "開発モード (Single: 個人/管理者のみ, Team: 複数人/レビュー必須)"
         required: true
-        default: "Team"
+        default: "Single"
         type: choice
         options:
           - Team
