@@ -12,17 +12,21 @@ on:
         default: "AEGIS_R_repoTemplate_20260211"
       _repo_name_hint:
         description: |
-          入力不要。リポジトリ名は下記6または7項目をハイフン（-）で連結して自動生成されます。
-          AEGIS-[env_code]-[repo_type]-[molecule_no]-([study_no]-)[reporting_event]-[environment_name]
-          ※ AEGIS は固定、study_no は Sタイプのみ必須、Mタイプでは省略されます。
+          <<No need to input>>リポジトリ名は入力項目を連結して自動生成されます。
+          AEGIS-[env_code]-[repo_type(M/S)]-[molecule_no]-([study_no]-)[reporting_event]-[environment]
         required: false
-        default: "例：AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev"
+        default: "e.g.) AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev"
       env_code:
-        description: "〇〇説明用、自由に設定可能（例: PRD, ZTEST等）"
+        description: "環境 e.g.) PRD, ZVAL, ZDEV"
         required: true
-        default: "PRD"
+        default: "ZDEV"
+        type: choice
+        options:
+          - PRD
+          - ZVAL
+          - ZDEV
       repo_type:
-        description: "リポジトリタイプ"
+        description: "For Molecule(cross-studies) / Study"
         required: true
         type: choice
         options:
@@ -30,19 +34,19 @@ on:
           - M
         default: "S"
       molecule_no:
-        description: "MoleculeNo（SタイプもMタイプも必須）"
+        description: "Molecule ID(required)"
         required: true
-        default: "RO1234567"
+        default: "RO0000001"
       study_no:
-        description: "StudyNo（Sタイプ必須、Mタイプ不要）"
+        description: "Study No(required for type S)"
         required: false
         default: "STD2002"
       reporting_event:
-        description: "自由に設定可能、フォルダ名に対応必要"
+        description: "レポーティングイベント名入力（'-'は使用禁止）"
         required: true
         default: "ReportingEvent1"
       environment_name:
-        description: "環境名、self-hosted Runner のラベルに対応必要"
+        description: "Choose environment"
         required: true
         type: choice
         options:
@@ -51,15 +55,15 @@ on:
           - prod
         default: "dev"
       codeowner:
-        description: "Code Owner（UserIDまたはTeamSlug、カンマ区切りで複数指定可）"
+        description: "Code Owner（UserIDまたはTeamSlug, カンマ区切りで複数指定可）"
         required: true
         default: "atsurinange"
       team_slug:
-        description: "Team Slug（Team名ではありません）、カンマ区切りで複数指定可"
+        description: "Team Slug, カンマ区切りで複数指定可"
         required: true
         default: "aegis-admins-dev"
       team_mode:
-        description: "開発モード (Single: 個人/管理者のみ, Team: 複数人/レビュー必須)"
+        description: "開発体制 (Single: 個人, Team: 複数人/レビュー必須)"
         required: true
         default: "Single"
         type: choice
@@ -293,6 +297,31 @@ jobs:
           echo "❌ タイムアウト: リポジトリの作成を確認できませんでした。"
           exit 1
 
+      - name: PRマージポリシーの設定 (Merge Commit のみ許可)
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ env.REPO_NAME }}"
+          echo "Configuring PR merge strategies for $OWNER/$REPO_NAME (merge commit only)..."
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$OWNER/$REPO_NAME" \
+            -d '{
+              "allow_merge_commit": true,
+              "allow_squash_merge": false,
+              "allow_rebase_merge": false
+            }')
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ PR merge strategies configured (only merge commit enabled)."
+          else
+            echo "❌ Failed to configure PR merge strategies. Status: $HTTP_CODE"
+            echo "Body: $BODY"
+            exit 1
+          fi
       - name: カスタムプロパティ (StudyNo) を設定
         run: |
           # Custom Property 設定 (PATCH /repos/{owner}/{repo}/custom-properties/values)
