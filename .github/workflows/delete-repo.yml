@@ -1,0 +1,94 @@
+# ================================================
+# 機能概要
+# -----------------------------------------------
+# このワークフローは、手動実行を契機に対象リポジトリの存在を確認し、
+# GitHub API を使用して指定リポジトリを削除します。
+#
+# 実行条件：
+# ・workflow_dispatch（手動実行）時
+#
+# 主な処理：
+# ・GitHub App トークンを生成して権限を取得（Generate App Token）
+# ・入力された repo_name を基に対象リポジトリの存在を検証
+# ・検証を通過した場合のみ、対象リポジトリに対して削除 API を実行
+# ================================================
+
+name: Repo Factory - Delete Repository
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: "Name of the repository to be deleted"
+        required: true
+        default: "AEGIS-PRD-S-xxxx-yyyy-zzzz-dev"
+
+jobs:
+  delete-repo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CREATE_REPO_CLIENT_ID }}
+          private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set GH_TOKEN
+        run: echo "GH_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Validate input parameters
+        id: validate
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          REPO_NAME="${{ github.event.inputs.repo_name }}"
+          echo "Validating repository: $REPO_NAME"
+
+          # ルール 1：既存在チェック
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME)
+
+          if [ "$STATUS" == "404" ]; then
+            echo "❌ Repository ($REPO_NAME) not found"
+            exit 1
+          elif [ "$STATUS" != "200" ]; then
+            echo "❌ Failed to validate repository existence. Status: $STATUS"
+            exit 1
+          fi
+
+          echo "✅ Validation passed"
+
+      - name: Delete repository
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          REPO_NAME="${{ github.event.inputs.repo_name }}"
+          echo "Deleting repository: $REPO_NAME"
+
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME")
+
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "✅ Repository ($REPO_NAME) deleted successfully."
+          else
+            echo "❌ Failed to delete repository. Status: $HTTP_CODE"
+            echo "Body: $BODY"
+            exit 1
+          fi
