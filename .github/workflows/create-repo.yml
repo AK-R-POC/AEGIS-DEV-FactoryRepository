@@ -84,6 +84,13 @@ env:
   DEFAULT_BRANCH: "main"
   # mainブランチに加えて、新しいリポジトリに作成されるブランチ。スペース区切りで複数指定可能。
   OTHER_BRANCHES: "dev qa"
+  TEMPLATE_NAME: ${{ github.event.inputs.template_name }}
+  MOLECULE: ${{ github.event.inputs.molecule }}
+  REPO_TYPE: ${{ github.event.inputs.repo_type }}
+  STUDY_NO: ${{ github.event.inputs.study_no }}
+  REPORTING_EVENT_NAME: ${{ github.event.inputs.reporting_event_name }}
+  ENVIRONMENT: ${{ github.event.inputs.environment }}
+  REVIEWER_REQUIREMENT: ${{ github.event.inputs.reviewer_requirement }}
 
 jobs:
   create-repo:
@@ -114,7 +121,6 @@ jobs:
           # ---------------------------------------------------
           # 1. テンプレートの存在チェック
           # ---------------------------------------------------
-          TEMPLATE_NAME="${{ github.event.inputs.template_name }}"
           echo "Validating template: $TEMPLATE_NAME"
 
           STATUS_TPL=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -123,7 +129,7 @@ jobs:
             https://api.github.com/repos/${{ github.repository_owner }}/$TEMPLATE_NAME)
 
           if [ "$STATUS_TPL" == "404" ]; then
-            echo "❌ Template repository ($TEMPLATE_NAME) not found."
+            echo "❌ Template repository ($TEMPLATE_NAME) not found or no access."
             exit 1
           elif [ "$STATUS_TPL" != "200" ]; then
             echo "❌ Failed to validate template repository. Status: $STATUS_TPL"
@@ -134,8 +140,8 @@ jobs:
           # ---------------------------------------------------
           # 2. StudyNoの必須チェック
           # ---------------------------------------------------
-          if [ "${{ github.event.inputs.repo_type }}" == "Study" ]; then
-            if [ -z "${{ github.event.inputs.study_no }}" ]; then
+          if [ "$REPO_TYPE" == "Study" ]; then
+            if [ -z "$STUDY_NO" ]; then
               echo "❌ StudyNo is required for Study type repositories."
               exit 1
             fi
@@ -146,11 +152,6 @@ jobs:
           # 3. リポジトリ名の組み立てと検証
           # ---------------------------------------------------
           # _repo_name_hintの説明に従い、入力パラメータからリポジトリ名を組み立てる
-          ENVIRONMENT="${{ github.event.inputs.environment }}"
-          REPO_TYPE="${{ github.event.inputs.repo_type }}"
-          MOLECULE="${{ github.event.inputs.molecule }}"
-          STUDY_NO="${{ github.event.inputs.study_no }}"
-          REPORTING_EVENT_NAME="${{ github.event.inputs.reporting_event_name }}"
 
           # 第3部：リポジトリタイプ
           if [ "$REPO_TYPE" == "Study" ]; then
@@ -202,19 +203,24 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
-          echo "Attempting to create repository ${{ env.REPO_NAME }} from template ${{ github.event.inputs.template_name }}..."
+          echo "Attempting to create repository $REPO_NAME from template $TEMPLATE_NAME..."
+
+          JSON_PAYLOAD=$(cat <<EOF
+          {
+            "name": "$REPO_NAME",
+            "owner": "${{ github.repository_owner }}",
+            "private": false
+          }
+          EOF
+          )
 
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.inputs.template_name }}/generate" \
-            -d '{
-              "name": "${{ env.REPO_NAME }}",
-              "owner": "${{ github.repository_owner }}",
-              "private": false
-            }')
+            "https://api.github.com/repos/${{ github.repository_owner }}/$TEMPLATE_NAME/generate" \
+            -d "$JSON_PAYLOAD")
 
           HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
           BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
@@ -232,15 +238,14 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
-          TARGET_REPO="${{ github.repository_owner }}/${{ env.REPO_NAME }}"
-          DEFAULT_BRANCH="${{ env.DEFAULT_BRANCH }}"
+          TARGET_REPO="${{ github.repository_owner }}/$REPO_NAME"
           echo "Waiting for repository creation to complete... ($TARGET_REPO)"
 
           MAX_RETRIES=10
           SLEEP_SEC=5
 
-          for ((i=1; i<=MAX_RETRIES; i++)); do
-            echo "Attempt $i/$MAX_RETRIES: Checking repo and ${DEFAULT_BRANCH} branch existence..."
+          for ((i=1;i<=MAX_RETRIES;i++)); do
+            echo "Attempt $i/$MAX_RETRIES: Checking repo and $DEFAULT_BRANCH branch existence..."
             
             # リポジトリのデフォルトブランチ情報を取得して存在確認 (200 OK なら作成完了とみなす)
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -262,14 +267,12 @@ jobs:
 
       - name: Add Repository to Runner Group
         uses: actions/github-script@v8
-        env:
-          REPO_NAME: ${{ env.REPO_NAME }}
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
             const owner = context.repo.owner;
             const repo = process.env.REPO_NAME;
-            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
+            const environment = process.env.ENVIRONMENT.toLowerCase();
 
             // 1. environment → RunnerGroup名のマッピング
             const groupNameMap = { dev: "AEGIS-RunnerGroup-DEV", val: "AEGIS-RunnerGroup-VAL", prd: "AEGIS-RunnerGroup" };
@@ -362,7 +365,6 @@ jobs:
           set -euo pipefail
 
           OWNER="${{ github.repository_owner }}"
-          REPO_NAME="${{ env.REPO_NAME }}"
           echo "Configuring PR merge strategies for $OWNER/$REPO_NAME (merge commit only)..."
 
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
@@ -394,20 +396,20 @@ jobs:
           set -euo pipefail
 
           # 変数を設定
-          MOLECULE_VALUE="${{ github.event.inputs.molecule }}"
-          STUDY_NO_VALUE="${{ github.event.inputs.study_no }}"
+          MOLECULE_VALUE="$MOLECULE"
+          STUDY_NO_VALUE="$STUDY_NO"
 
           # repo_typeが'Molecule'の場合、StudyNoを空文字列に設定
-          if [ "${{ github.event.inputs.repo_type }}" == "Molecule" ]; then
+          if [ "$REPO_TYPE" == "Molecule" ]; then
             STUDY_NO_VALUE=""
           fi
 
-          echo "Setting custom properties for repository: ${{ env.REPO_NAME }}"
+          echo "Setting custom properties for repository: $REPO_NAME"
 
           # Prepare JSON payload
           JSON_PAYLOAD=$(cat <<EOF
           {
-            "repository_names": ["${{ env.REPO_NAME }}"],
+            "repository_names": ["$REPO_NAME"],
             "properties": [
               {"property_name": "Molecule", "value": "$MOLECULE_VALUE"},
               {"property_name": "StudyNo", "value": "$STUDY_NO_VALUE"}
@@ -438,14 +440,12 @@ jobs:
 
       - name: Grant Admin Permission to Admin Team
         uses: actions/github-script@v8
-        env:
-          REPO_NAME: ${{ env.REPO_NAME }}
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
             const owner = context.repo.owner;
             const repo = process.env.REPO_NAME;
-            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
+            const environment = process.env.ENVIRONMENT.toLowerCase();
             const adminTeamSlug = `aegis-${environment}-admin`;
 
             try {
@@ -486,17 +486,15 @@ jobs:
 
       - name: Grant Write Permission to Project Teams
         uses: actions/github-script@v8
-        env:
-          REPO_NAME: ${{ env.REPO_NAME }}
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
             const owner = context.repo.owner;
             const repo = process.env.REPO_NAME;
-            const repoType = "${{ github.event.inputs.repo_type }}";
-            const studyNo = "${{ github.event.inputs.study_no }}".toLowerCase();
-            const molecule = "${{ github.event.inputs.molecule }}".toLowerCase();
-            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
+            const repoType = process.env.REPO_TYPE;
+            const studyNo = process.env.STUDY_NO.toLowerCase();
+            const molecule = process.env.MOLECULE.toLowerCase();
+            const environment = process.env.ENVIRONMENT.toLowerCase();
             let projectTeamSlug = `aegis-${environment}-`;
             if (repoType === "Study") {
               projectTeamSlug += `${studyNo}`;
@@ -549,9 +547,6 @@ jobs:
           # ---------------------------------------------------
           # ブランチ作成: dev, qa... (デフォルトブランチから作成)
           # ---------------------------------------------------
-          REPO_NAME="${{ env.REPO_NAME }}"
-          DEFAULT_BRANCH="${{ env.DEFAULT_BRANCH }}"
-
           # 作業用ディレクトリ
           WORK_DIR="temp_branch_$REPO_NAME"
           mkdir -p $WORK_DIR
@@ -564,9 +559,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          echo "Creating additional branches: ${{ env.OTHER_BRANCHES }}"
+          echo "Creating additional branches: $OTHER_BRANCHES"
 
-          for BRANCH in ${{ env.OTHER_BRANCHES }}; do
+          for BRANCH in $OTHER_BRANCHES; do
             echo "Creating branch: $BRANCH"
             git checkout -b $BRANCH
             git push origin $BRANCH
@@ -585,13 +580,12 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
-          TARGET_REPO="${{ github.repository_owner }}/${{ env.REPO_NAME }}"
-          DEFAULT_BRANCH="${{ env.DEFAULT_BRANCH }}"
+          TARGET_REPO="${{ github.repository_owner }}/$REPO_NAME"
 
           # ルールセット定義ファイルのディレクトリ
           FACTORY_REPO="${{ github.repository }}" 
           RULES_DIR=".github/rulesets"
-          TARGET_BRANCHES="$DEFAULT_BRANCH ${{ env.OTHER_BRANCHES }}"
+          TARGET_BRANCHES="$DEFAULT_BRANCH $OTHER_BRANCHES"
 
           echo "Target branches for rulesets: $TARGET_BRANCHES"
 
@@ -632,13 +626,17 @@ jobs:
             # JSON抽出とデコード (jqを使用)
             echo "$DOWNLOAD_RESP" | jq -r .content | base64 -d > temp_ruleset.json
             
-            # コメント削除と整形
-            # sedで // 以降を削除。文字列内の // を誤検知するリスクがあるが、
-            # 現在の定義ファイルにはURL等が含まれていないため許容する。
-            sed 's|//.*||g' temp_ruleset.json > clean_ruleset.json
+
+            # コメント削除と整形 (JSON文字列を保持しつつ // と /* */ を除去)
+            python3 -c "import json; import re; \
+              content = open('temp_ruleset.json', 'r', encoding='utf-8').read(); \
+              pattern = r'(\"(?:[^\"\\\\]|\\\\.)*\")|//[^\\n]*|/\\*[\\s\\S]*?\\*/'; \
+              cleaned = re.sub(pattern, lambda m: m.group(1) if m.group(1) else '', content); \
+              data = json.loads(cleaned); \
+              open('clean_ruleset.json', 'w', encoding='utf-8').write(json.dumps(data, indent=2, ensure_ascii=False))"
 
             # reviewer_requirement に応じて required_approving_review_count を設定
-            REVIEWER_REQ="${{ github.event.inputs.reviewer_requirement }}"
+            REVIEWER_REQ="$REVIEWER_REQUIREMENT"
             if [ "$REVIEWER_REQ" == "required" ]; then
               jq '(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count) = 1' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
             fi
@@ -673,8 +671,6 @@ jobs:
 
       - name: Setup Labels (AEGIS)
         uses: actions/github-script@v8
-        env:
-          REPO_NAME: ${{ env.REPO_NAME }}
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
@@ -739,7 +735,6 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
-          REPO_NAME="${{ env.REPO_NAME }}"
           echo "Creating initial tag v0.0.0 for $REPO_NAME..."
 
           # 作業用ディレクトリ

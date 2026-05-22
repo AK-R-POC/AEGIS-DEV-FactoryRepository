@@ -15,8 +15,7 @@
   // Organization管理者やリポジトリ管理者が緊急時にルールを無視して操作できるようにするために重要です。
   "bypass_actors": [
     {
-      // Repository Admin (Maintainer) role
-      // 5: Maintainer (管理者権限)
+      // 5: Repository admin Role
       "actor_id": 5,
       "actor_type": "RepositoryRole",
       "bypass_mode": "always"
