@@ -3,7 +3,7 @@
 # -----------------------------------------------
 # このワークフローは、手動実行を契機に入力値を検証し、
 # テンプレートから新規リポジトリを作成して初期設定を一括適用します。
-#
+# Ver.13の内容を北川用のOrganization用にアレンジ（Factory/Templateのリポ名は変更していない）
 # 実行条件：
 # ・workflow_dispatch（手動実行）時
 #
@@ -14,7 +14,6 @@
 # ・環境（DEV/VAL/PRD）に対応する self-hosted runner group にリポジトリを追加
 # ・PRマージ方針の設定、カスタムプロパティ設定、管理チーム／プロジェクトチームへの権限付与
 # ・mainを起点に追加ブランチ（既定: dev qa）を作成し、対象ブランチごとにルールセットを適用
-# ・ルールセット作成時に入力引数に応じて承認人数（レビュー人数）を設定
 # ・AEGISラベルを作成し、初期タグ v0.0.0 を作成して push
 #
 # 重要な分岐：
@@ -62,23 +61,15 @@ on:
       molecule:
         description: "Molecule"
         required: true
-        default: "RO1234567"
+        default: "RO0000001"
       study_no:
         description: "StudyNo (Required for Study type, not for Molecule type)"
         required: false
-        default: "STD-0001"
+        default: "STD2001"
       reporting_event_name:
-        description: "Freely configurable, must correspond to a folder name"
+        description: "Reporting event name (Freely configurable, must correspond to a folder name)"
         required: true
-        default: "ReportingEvent1"
-      reviewer_requirement:
-        description: "Reviewer requirement: optional or required"
-        required: true
-        type: choice
-        options:
-          - optional
-          - required
-        default: optional
+        default: "ReportingEventX"
 
 env:
   DEFAULT_BRANCH: "main"
@@ -89,8 +80,6 @@ env:
   REPO_TYPE: ${{ github.event.inputs.repo_type }}
   STUDY_NO: ${{ github.event.inputs.study_no }}
   REPORTING_EVENT_NAME: ${{ github.event.inputs.reporting_event_name }}
-  ENVIRONMENT: ${{ github.event.inputs.environment }}
-  REVIEWER_REQUIREMENT: ${{ github.event.inputs.reviewer_requirement }}
 
 jobs:
   create-repo:
@@ -635,11 +624,6 @@ jobs:
               data = json.loads(cleaned); \
               open('clean_ruleset.json', 'w', encoding='utf-8').write(json.dumps(data, indent=2, ensure_ascii=False))"
 
-            # reviewer_requirement に応じて required_approving_review_count を設定
-            REVIEWER_REQ="$REVIEWER_REQUIREMENT"
-            if [ "$REVIEWER_REQ" == "required" ]; then
-              jq '(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count) = 1' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
-            fi
 
             echo "Creating ruleset for branch: $BRANCH..."
             
