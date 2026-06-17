@@ -65,12 +65,22 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
+          # 入力値の前後空白を除去
+          trim() {
+            local text="$1"
+            text="${text#"${text%%[![:space:]]*}"}"
+            text="${text%"${text##*[![:space:]]}"}"
+            printf '%s' "$text"
+          }
+
           OWNER="${{ github.repository_owner }}"
-          MEMBER_ROLE="${{ github.event.inputs.member_role }}"
+          MEMBER_ROLE_RAW="${{ github.event.inputs.member_role }}"
+          MEMBER_ROLE="$(trim "$MEMBER_ROLE_RAW")"
           DATE_SUFFIX=$(date -u +"%Y%m%d")
           ORG_MEMBERS_FILE="$OWNER-$MEMBER_ROLE-members-$DATE_SUFFIX.json"
           MEMBERS_SUMMARY_FILE="$OWNER-$MEMBER_ROLE-members-summary-$DATE_SUFFIX.txt"
 
+          echo "MEMBER_ROLE=$MEMBER_ROLE" >> $GITHUB_ENV
           echo "ORG_MEMBERS_FILE=$ORG_MEMBERS_FILE" >> $GITHUB_ENV
           echo "MEMBERS_SUMMARY_FILE=$MEMBERS_SUMMARY_FILE" >> $GITHUB_ENV
           echo "✅ Output files: $ORG_MEMBERS_FILE, $MEMBERS_SUMMARY_FILE"
@@ -82,7 +92,6 @@ jobs:
 
           OWNER="${{ github.repository_owner }}"
           OUTPUT_FILE="$ORG_MEMBERS_FILE"
-          MEMBER_ROLE="${{ github.event.inputs.member_role }}"
 
           echo "Fetching members for organization: $OWNER"
           echo "Member role filter: $MEMBER_ROLE"

@@ -24,7 +24,7 @@ on:
       repo_name:
         description: "Name of the repository to be deleted"
         required: true
-        default: "AEGIS-PRD-S-xxxx-yyyy-zzzz-dev"
+        default: "AEGIS-DEV-S-RO0000001-STD2001-ReportingEventX"
 
 jobs:
   delete-repo:
@@ -49,13 +49,24 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
+          # 入力値の前後空白を除去
+          trim() {
+            local text="$1"
+            text="${text#"${text%%[![:space:]]*}"}"
+            text="${text%"${text##*[![:space:]]}"}"
+            printf '%s' "$text"
+          }
+
+          REPO_NAME="$(trim "$REPO_NAME")"
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+
           echo "Validating repository: $REPO_NAME"
 
           # ルール 1：既存在チェック
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
-            https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME)
+            "https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME")
 
           if [ "$STATUS" == "404" ]; then
             echo "❌ Repository ($REPO_NAME) not found or no access"
