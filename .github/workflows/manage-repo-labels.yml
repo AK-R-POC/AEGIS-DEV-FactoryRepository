@@ -1,0 +1,160 @@
+# ================================================
+# 機能概要
+# -----------------------------------------------
+# このワークフローは、手動実行を契機に指定リポジトリのラベルを
+# 定義ファイルに基づいて管理（更新または新規作成）します。
+#
+# 実行条件：
+# ・workflow_dispatch（手動実行）時
+#
+# 主な処理：
+# ・GitHub App トークンを生成して権限を取得（Generate App Token）
+# ・指定されたラベル定義ファイルを読み込み、妥当性検証と項目正規化（name/color/description）を実施
+# ・定義済みラベルを対象リポジトリへ Upsert（存在すれば更新、なければ作成）
+# ================================================
+
+name: Repo Factory - Manage(Upsert) Repository Labels
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: "Target repository name"
+        required: true
+        default: "AEGIS-DEV-S-RO0000001-STD2001-ReportingEventX"
+      label_definition_file:
+        description: "Label definition file name under .github/label-management/label-definitions (for example: aegis-default-labels.json)"
+        required: true
+        default: "aegis-default-labels.json"
+
+jobs:
+  manage-labels:
+    runs-on: ubuntu-latest
+    env:
+      REPO_NAME: ${{ github.event.inputs.repo_name }}
+      LABEL_DEFINITION_FILE: ${{ github.event.inputs.label_definition_file }}
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CREATE_REPO_CLIENT_ID }}
+          private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set GH_TOKEN
+        run: echo "GH_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate label definition
+        id: validate-label-definition
+        uses: ./.github/label-management/actions/validate-label-definition
+        with:
+          github_token: ${{ env.GH_TOKEN }}
+          label_definition_file: ${{ env.LABEL_DEFINITION_FILE }}
+
+      - name: Manage Labels from Definition
+        uses: actions/github-script@v8
+        env:
+          DEFINED_LABELS_JSON: ${{ steps.validate-label-definition.outputs.labels_json }}
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const targetRepo = (process.env.REPO_NAME || "").trim();
+            const definedLabels = JSON.parse(process.env.DEFINED_LABELS_JSON || "[]");
+
+            // ---------------------------------------------------
+            // パラメータの検証
+            // ---------------------------------------------------
+            if (!targetRepo) {
+              core.setFailed("❌ repo_name is required.");
+              return;
+            }
+
+            core.info(`Managing labels for ${owner}/${targetRepo}...`);
+
+            // ---------------------------------------------------
+            // リポジトリの存在確認
+            // ---------------------------------------------------
+            const repoResponse = await github.request("GET /repos/{owner}/{repo}", {
+              owner: owner,
+              repo: targetRepo,
+              headers: {
+                "X-GitHub-Api-Version": "2026-03-10"
+              }
+            }).catch(error => ({ error }));
+
+            if (repoResponse.error) {
+              const repoError = repoResponse.error;
+              if (repoError.status === 404) {
+                core.setFailed(`❌ Repository (${targetRepo}) not found or no access.`);
+              } else {
+                core.setFailed(`❌ Failed to validate repository existence: [${repoError.status}] ${repoError.message}`);
+              }
+              return;
+            }
+
+            const createdLabels = [];
+            const updatedLabels = [];
+
+            // ---------------------------------------------------
+            // ラベルの Upsert 処理（更新または作成）
+            // ---------------------------------------------------
+            for (const label of definedLabels) {
+              try {
+                await github.rest.issues.updateLabel({
+                  owner: owner,
+                  repo: targetRepo,
+                  name: label.name,
+                  new_name: label.name,
+                  color: label.color,
+                  description: label.description,
+                  headers: {
+                    "X-GitHub-Api-Version": "2026-03-10"
+                  }
+                });
+                updatedLabels.push(label.name);
+                core.info(`✅ Updated label: ${label.name}`);
+              } catch (error) {
+                if (error.status === 404) {
+                  try {
+                    await github.rest.issues.createLabel({
+                      owner: owner,
+                      repo: targetRepo,
+                      name: label.name,
+                      color: label.color,
+                      description: label.description,
+                      headers: {
+                        "X-GitHub-Api-Version": "2026-03-10"
+                      }
+                    });
+                    createdLabels.push(label.name);
+                    core.info(`✅ Created label: ${label.name}`);
+                  } catch (createError) {
+                    core.setFailed(`❌ Failed to create label '${label.name}': [${createError.status}] ${createError.message}`);
+                    return;
+                  }
+                } else {
+                  core.setFailed(`❌ Failed to update label '${label.name}': [${error.status}] ${error.message}`);
+                  return;
+                }
+              }
+            }
+
+            // ---------------------------------------------------
+            // 処理結果のサマリ出力
+            // ---------------------------------------------------
+            core.info("---------------------------------------------------");
+            core.info("✅ Label management summary");
+            core.info(`Updated labels: ${updatedLabels.length}`);
+            core.info(`Created labels: ${createdLabels.length}`);
+
+            const detailOrNone = (items) => items.length > 0 ? items.join(", ") : "(none)";
+            core.info(`Updated detail: ${detailOrNone(updatedLabels)}`);
+            core.info(`Created detail: ${detailOrNone(createdLabels)}`);

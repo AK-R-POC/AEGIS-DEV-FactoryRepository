@@ -1,0 +1,148 @@
+# ================================================
+# 機能概要
+# -----------------------------------------------
+# この Composite Action は、ラベル定義ファイルを読み込み、
+# 検証および正規化した labels_json を出力します。
+#
+# 実行条件：
+# ・呼び出し元 workflow から実行された時
+#
+# 主な処理：
+# ・label_definition_file の入力値（ファイル名のみ許可）を検証
+# ・.github/label-management/label-definitions 配下の JSON を取得
+# ・name / color / description の妥当性を検証
+# ・重複ラベル名を検出
+# ・name, color, description を正規化して labels_json として出力
+# ================================================
+
+name: Validate Label Definition
+description: Load and validate a label definition JSON file stored under .github/label-management/label-definitions.
+
+inputs:
+  github_token:
+    description: GitHub token used to read the label definition file.
+    required: true
+  label_definition_file:
+    description: Label definition file name.
+    required: true
+
+outputs:
+  labels_json:
+    value: ${{ steps.validate.outputs.labels_json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate label definition
+      id: validate
+      uses: actions/github-script@v8
+      env:
+        LABEL_DEFINITION_FILE: ${{ inputs.label_definition_file }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const labelDefinitionFileName = (process.env.LABEL_DEFINITION_FILE || "").trim();
+          const baseDir = ".github/label-management/label-definitions";
+
+          if (!labelDefinitionFileName) {
+            core.setFailed("❌ label_definition_file is required.");
+            return;
+          }
+
+          if (labelDefinitionFileName.includes("/") || labelDefinitionFileName.includes("\\") || labelDefinitionFileName.includes("..")) {
+            core.setFailed("❌ label_definition_file must be a file name only.");
+            return;
+          }
+
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const labelDefinitionPath = `${baseDir}/${labelDefinitionFileName}`;
+
+          core.info(`Loading label definition from ${owner}/${repo}/${labelDefinitionPath}...`);
+
+          try {
+            const response = await github.rest.repos.getContent({
+              owner: owner,
+              repo: repo,
+              path: labelDefinitionPath,
+              headers: {
+                "X-GitHub-Api-Version": "2026-03-10"
+              }
+            });
+
+            if (!response.data || Array.isArray(response.data) || !response.data.content) {
+              core.setFailed(`❌ Invalid label definition file response: ${labelDefinitionPath}`);
+              return;
+            }
+
+            const decoded = Buffer.from(response.data.content, "base64").toString("utf8");
+            const parsed = JSON.parse(decoded);
+            const definedLabels = Array.isArray(parsed) ? parsed : parsed.labels;
+
+            if (!Array.isArray(definedLabels)) {
+              core.setFailed(`❌ Label definition format is invalid in ${labelDefinitionPath}`);
+              return;
+            }
+
+            const validationErrors = [];
+            const duplicateNames = [];
+            const seenNameKeys = new Set();
+
+            for (let i = 0; i < definedLabels.length; i++) {
+              const label = definedLabels[i];
+
+              if (label === null) {
+                validationErrors.push(`  - Label [index ${i}]: entry is null. Each label must be an object.`);
+                continue;
+              }
+
+              if (typeof label?.name !== "string" || label.name.trim() === "") {
+                validationErrors.push(`  - Label [index ${i}]: 'name' is required and must be a non-empty string.`);
+              }
+
+              const name = label?.name?.trim?.() || "";
+              const color = String(label?.color || "").trim();
+              const description = String(label?.description || "").trim();
+              const displayLabel = name ? `'${name}'` : `[index ${i}]`;
+
+              if (!/^[0-9a-fA-F]{6}$/.test(color)) {
+                validationErrors.push(`  - Label ${displayLabel}: invalid color '${color}'. Use 6-digit hex without '#'.`);
+              }
+
+              if (description.length > 100) {
+                validationErrors.push(`  - Label ${displayLabel}: description is too long (${description.length} characters). Must be 100 characters or fewer.`);
+              }
+
+              if (name) {
+                const nameKey = name.toLowerCase();
+                if (seenNameKeys.has(nameKey)) {
+                  if (!duplicateNames.includes(name)) {
+                    duplicateNames.push(name);
+                  }
+                }
+                seenNameKeys.add(nameKey);
+              }
+            }
+
+            if (duplicateNames.length > 0) {
+              validationErrors.push(`  - Duplicate label names found: ${duplicateNames.join(", ")}`);
+            }
+
+            if (validationErrors.length > 0) {
+              core.setFailed("❌ Validation errors found in label definition:\n" + validationErrors.join("\n"));
+              return;
+            }
+
+            const normalizedLabels = definedLabels.map((label) => ({
+              ...label,
+              name: String(label.name).trim(),
+              color: String(label.color || "").trim(),
+              description: label?.description === null || label?.description === undefined ? "" : String(label.description).trim()
+            }));
+
+            core.setOutput("labels_json", JSON.stringify(normalizedLabels));
+            core.info(`✅ Validation succeeded. ${normalizedLabels.length} label(s) normalized and exported to labels_json.`);
+          } catch (error) {
+            core.setFailed(`❌ Failed to load label definition '${labelDefinitionPath}': [${error.status}] ${error.message}`);
+            return;
+          }

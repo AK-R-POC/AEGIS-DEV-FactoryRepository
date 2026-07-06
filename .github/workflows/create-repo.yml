@@ -16,7 +16,8 @@
 # ・環境（DEV/VAL/PRD）に対応する self-hosted runner group にリポジトリを追加
 # ・PRマージ方針の設定、カスタムプロパティ設定、管理チーム／プロジェクトチームへの権限付与
 # ・mainを起点に追加ブランチ（既定: dev qa）を作成し、対象ブランチごとにルールセットを適用
-# ・AEGISラベルを作成し、初期タグ v0.0.0 を作成して push
+# ・ラベル定義を検証し、項目正規化（name/color/description）後に AEGIS ラベルを作成
+# ・初期タグ v0.0.0 を作成して push
 #
 # 重要な分岐：
 # ・repo_type が Study の場合のみ study_no を必須とし、リポジトリ名に study_no を含めます（Molecule の場合は除外）。
@@ -708,8 +709,20 @@ jobs:
             fi
           done
 
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate label definition
+        id: validate-label-definition
+        uses: ./.github/label-management/actions/validate-label-definition
+        with:
+          github_token: ${{ env.GH_TOKEN }}
+          label_definition_file: aegis-default-labels.json
+
       - name: Setup Labels (AEGIS)
         uses: actions/github-script@v8
+        env:
+          LABELS_JSON: ${{ steps.validate-label-definition.outputs.labels_json }}
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
@@ -717,24 +730,7 @@ jobs:
             const repo = process.env.REPO_NAME;
             core.info(`Setting up AEGIS labels for ${owner}/${repo}...`);
 
-            const labels = [
-              {name: "AEGIS: release", color: "b60205", description: "This PR requires a release"},
-              {name: "AEGIS: no-release", color: "cfd3d7", description: "This PR does not require a release"},
-              {name: "Risk: Low", color: "e88888", description: ""},
-              {name: "Risk: High", color: "e88888", description: ""},
-              {name: "Product: SDTMv", color: "7bc88a", description: ""},
-              {name: "Product: ADaM", color: "7bc88a", description: ""},
-              {name: "Product: TLG", color: "7bc88a", description: ""},
-              {name: "QC-Method: DP", color: "7ba8d9", description: ""},
-              {name: "QC-Method: CR", color: "7ba8d9", description: ""},
-              {name: "QC-Method: IDD", color: "7ba8d9", description: ""},
-              {name: "QC-Method: FL", color: "7ba8d9", description: ""},
-              {name: "Status: In Progress", color: "f2d574", description: ""},
-              {name: "Status: Ready for QC", color: "f2d574", description: ""},
-              {name: "Status: QC In Progress", color: "f2d574", description: ""},
-              {name: "Status: QC Complete", color: "f2d574", description: ""},
-              {name: "Status: Not required", color: "f2d574", description: ""}
-            ];
+            const labels = JSON.parse(process.env.LABELS_JSON || "[]");
 
             for (const label of labels) {
               core.info(`Creating label: ${label.name}`);
